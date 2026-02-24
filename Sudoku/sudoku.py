@@ -1,591 +1,562 @@
-# sudoku_csp.py
-import tkinter as tk
-from tkinter import ttk
-import copy
+from collections import deque, defaultdict
 import time
-import random
-from collections import deque
+import tkinter as tk
+from tkinter import messagebox
 
-class SudokuGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Sudoku - Constraint Satisfaction Problem (CSP) Solver")
-        self.root.geometry("1400x900")
-        self.root.configure(bg='#f0f0f0')
+class Sudoku:
+    def __init__(self, grid):
+        """
+        Initialize Sudoku CSP problem.
+        Variables: Each cell (i,j) is a variable
+        Domains: {1..9} for empty cells, single value for filled cells
+        Constraints: All different for rows, columns, and boxes
+        """
+        self.n = 3  # Standard 9x9 Sudoku
+        self.size = 9
+        self.grid = grid
         
-        # Initial puzzle (easy)
-        self.initial_board = [
-            [5, 3, 0, 0, 7, 0, 0, 0, 0],
-            [6, 0, 0, 1, 9, 5, 0, 0, 0],
-            [0, 9, 8, 0, 0, 0, 0, 6, 0],
-            [8, 0, 0, 0, 6, 0, 0, 0, 3],
-            [4, 0, 0, 8, 0, 3, 0, 0, 1],
-            [7, 0, 0, 0, 2, 0, 0, 0, 6],
-            [0, 6, 0, 0, 0, 0, 2, 8, 0],
-            [0, 0, 0, 4, 1, 9, 0, 0, 5],
-            [0, 0, 0, 0, 8, 0, 0, 7, 9]
-        ]
-        
-        self.current_board = copy.deepcopy(self.initial_board)
-        self.domains = {}  # Domain for each variable (cell)
-        self.selected_cell = None
-        self.solving = False
-        self.stats = {
-            'nodes': 0,
-            'backtracks': 0,
-            'arc_checks': 0,
-            'prunes': 0,
-            'time': 0
-        }
-        
-        self.setup_ui()
-        self.initialize_domains()
-        self.draw_board()
-    
-    def setup_ui(self):
-        # Title
-        title_frame = ttk.Frame(self.root)
-        title_frame.pack(pady=10)
-        
-        title_label = ttk.Label(title_frame, text="SUDOKU", 
-                                font=('Arial', 24, 'bold'))
-        title_label.pack()
-        
-        subtitle = ttk.Label(title_frame, 
-                            text="Constraint Satisfaction Problem (CSP) - AI Demo",
-                            font=('Arial', 12))
-        subtitle.pack()
-        
-        # Main content area
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        
-        # Left side - Sudoku board and CSP concepts
-        left_frame = ttk.Frame(main_frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Sudoku board
-        board_frame = ttk.LabelFrame(left_frame, text="Sudoku Puzzle", padding=10)
-        board_frame.pack(pady=10)
-        
-        self.board_canvas = tk.Canvas(board_frame, width=450, height=450, bg='white', 
-                                      highlightthickness=2, highlightbackground='#333')
-        self.board_canvas.pack()
-        self.board_canvas.bind('<Button-1>', self.on_cell_click)
-        
-        # CSP Concepts frame
-        concepts_frame = ttk.LabelFrame(left_frame, text="CONSTRAINT SATISFACTION PROBLEM (CSP) CONCEPTS", 
-                                        padding=10)
-        concepts_frame.pack(fill=tk.X, pady=10)
-        
-        concepts = [
-            ("VAR: Variables", "Each empty cell is a variable Xi"),
-            ("DOM: Domains", "Domain D(Xi) = {1, ..., 9}, legal values per cell"),
-            ("CON: Constraints", "All Different: every row, column & 3x3 box"),
-            ("AC-3: Arc-Consistency", "Enforce arc-consistency, prune domains via arcs"),
-            ("MRV: Minimum Remaining Values", "select variable with smallest domain first"),
-            ("FC: Forward Checking", "prune values from peers' domains"),
-            ("BT: Backtracking", "Undo assignment when domain becomes empty")
-        ]
-        
-        for i, (title, desc) in enumerate(concepts):
-            frame = ttk.Frame(concepts_frame)
-            frame.pack(fill=tk.X, pady=2)
-            ttk.Label(frame, text=title, font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
-            ttk.Label(frame, text=desc, font=('Arial', 9)).pack(side=tk.LEFT)
-        
-        # Right side - Statistics and controls
-        right_frame = ttk.Frame(main_frame)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
-        
-        # Control panel
-        control_frame = ttk.LabelFrame(right_frame, text="Controls", padding=10)
-        control_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        # Puzzle difficulty
-        diff_frame = ttk.Frame(control_frame)
-        diff_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(diff_frame, text="Puzzle:").pack(side=tk.LEFT)
-        self.difficulty_var = tk.StringVar(value="Easy")
-        diff_combo = ttk.Combobox(diff_frame, textvariable=self.difficulty_var,
-                                  values=["Easy", "Medium", "Hard"], width=10, state='readonly')
-        diff_combo.pack(side=tk.LEFT, padx=5)
-        
-        # Speed control
-        speed_frame = ttk.Frame(control_frame)
-        speed_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(speed_frame, text="Speed (ms):").pack(side=tk.LEFT)
-        self.speed_var = tk.StringVar(value="100")
-        speed_spin = ttk.Spinbox(speed_frame, from_=10, to=500, textvariable=self.speed_var, width=10)
-        speed_spin.pack(side=tk.LEFT, padx=5)
-        
-        # Buttons
-        button_frame = ttk.Frame(control_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(button_frame, text="New Puzzle", command=self.new_puzzle).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Solve", command=self.solve).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Stop", command=self.stop_solving).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Reset", command=self.reset).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="Show Domains", command=self.show_domains).pack(side=tk.LEFT, padx=2)
-        
-        # Live solver statistics
-        stats_frame = ttk.LabelFrame(right_frame, text="LIVE SOLVER STATISTICS", padding=10)
-        stats_frame.pack(fill=tk.X, pady=10)
-        
-        self.stats_vars = {}
-        stat_items = [
-            ("Nodes Explored:", "0"),
-            ("Backtracks:", "0"),
-            ("Arc-Consistency (AC-3) Arc Checks:", "0"),
-            ("Forward Checking Domain Prunes:", "0"),
-            ("Elapsed Time:", "0.000s"),
-            ("Domain Size & Selected Cell:", "—")
-        ]
-        
-        for label, default in stat_items:
-            frame = ttk.Frame(stats_frame)
-            frame.pack(fill=tk.X, pady=3)
-            ttk.Label(frame, text=label, font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
-            self.stats_vars[label] = ttk.Label(frame, text=default, font=('Arial', 9))
-            self.stats_vars[label].pack(side=tk.RIGHT)
-        
-        # Selected cell domain
-        domain_frame = ttk.LabelFrame(right_frame, text="SELECTED CELL DOMAIN", padding=10)
-        domain_frame.pack(fill=tk.X, pady=10)
-        
-        self.domain_label = ttk.Label(domain_frame, text="Click a cell to view its domain", 
-                                      font=('Arial', 10), wraplength=250)
-        self.domain_label.pack()
-        
-        # Event log
-        log_frame = ttk.LabelFrame(right_frame, text="CONSTRAINT SATISFACTION PROBLEM (CSP) EVENT LOG", 
-                                   padding=10)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        self.log_text = tk.Text(log_frame, height=10, width=40, wrap=tk.WORD)
-        scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
-        self.log_text.configure(yscrollcommand=scrollbar.set)
-        
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.log("CSP Solver initialized")
-        self.log("Ready to solve...")
-    
-    def initialize_domains(self):
-        """Initialize domains for all cells"""
+      
         self.domains = {}
-        for row in range(9):
-            for col in range(9):
-                if self.current_board[row][col] == 0:
-                    # Empty cell - domain is all possible values
-                    self.domains[(row, col)] = set(range(1, 10))
+        for i in range(self.size):
+            for j in range(self.size):
+                if grid[i][j] != 0:
+                    self.domains[(i, j)] = {grid[i][j]}
                 else:
-                    # Filled cell - domain is just that value
-                    self.domains[(row, col)] = {self.current_board[row][col]}
+                    self.domains[(i, j)] = set(range(1, 10))
         
-        # Apply initial constraints to prune domains
-        self.ac3()
-    
-    def draw_board(self):
-        """Draw the Sudoku board"""
-        self.board_canvas.delete("all")
+        self.peers = self._build_peers()
         
-        cell_size = 450 // 9
+        # Statistics tracking
+        self.nodes_explored = 0
+        self.backtracks = 0
+        self.start_time = None
+        self.end_time = None
         
-        # Draw grid
-        for i in range(10):
-            width = 3 if i % 3 == 0 else 1
-            color = '#333' if i % 3 == 0 else '#999'
-            
-            # Vertical lines
-            x = i * cell_size
-            self.board_canvas.create_line(x, 0, x, 450, width=width, fill=color)
-            
-            # Horizontal lines
-            y = i * cell_size
-            self.board_canvas.create_line(0, y, 450, y, width=width, fill=color)
+        # Validate initial grid
+        if not self._validate_initial_grid():
+            raise ValueError("Invalid initial grid: duplicate values in a row, column, or box.")
         
-        # Draw numbers
-        for row in range(9):
-            for col in range(9):
-                value = self.current_board[row][col]
-                if value != 0:
-                    x = col * cell_size + cell_size // 2
-                    y = row * cell_size + cell_size // 2
-                    
-                    # Different color for initial vs solved
-                    if self.initial_board[row][col] != 0:
-                        color = '#000'  # Original clues - black
-                        font_weight = 'bold'
-                    else:
-                        color = '#00F'  # Solved cells - blue
-                        font_weight = 'normal'
-                    
-                    self.board_canvas.create_text(x, y, text=str(value), 
-                                                  font=('Arial', 16, font_weight),
-                                                  fill=color)
-        
-        # Highlight selected cell
-        if self.selected_cell:
-            row, col = self.selected_cell
-            x1 = col * cell_size
-            y1 = row * cell_size
-            x2 = x1 + cell_size
-            y2 = y1 + cell_size
-            self.board_canvas.create_rectangle(x1, y1, x2, y2, outline='#ffd700', 
-                                               width=3, tags='highlight')
-    
-    def on_cell_click(self, event):
-        """Handle cell click"""
-        cell_size = 450 // 9
-        col = event.x // cell_size
-        row = event.y // cell_size
-        
-        if 0 <= row < 9 and 0 <= col < 9:
-            self.selected_cell = (row, col)
-            self.draw_board()
-            self.update_domain_display()
-    
-    def update_domain_display(self):
-        """Update the domain display for selected cell"""
-        if self.selected_cell and self.selected_cell in self.domains:
-            domain = sorted(self.domains[self.selected_cell])
-            value = self.current_board[self.selected_cell[0]][self.selected_cell[1]]
-            
-            if value != 0:
-                text = f"Cell [{self.selected_cell[0]+1},{self.selected_cell[1]+1}]\nFixed value: {value}"
-            else:
-                text = f"Cell [{self.selected_cell[0]+1},{self.selected_cell[1]+1}]\nDomain: {{{', '.join(map(str, domain))}}}"
-                text += f"\nSize: {len(domain)}"
-            
-            self.domain_label.config(text=text)
-    
-    def log(self, message):
-        """Add message to event log"""
-        self.log_text.insert(tk.END, f"> {message}\n")
-        self.log_text.see(tk.END)
-        self.root.update()
-    
-    def update_stats(self):
-        """Update statistics display"""
-        self.stats_vars["Nodes Explored:"].config(text=str(self.stats['nodes']))
-        self.stats_vars["Backtracks:"].config(text=str(self.stats['backtracks']))
-        self.stats_vars["Arc-Consistency (AC-3) Arc Checks:"].config(text=str(self.stats['arc_checks']))
-        self.stats_vars["Forward Checking Domain Prunes:"].config(text=str(self.stats['prunes']))
-        self.stats_vars["Elapsed Time:"].config(text=f"{self.stats['time']:.3f}s")
-        
-        if self.selected_cell and self.selected_cell in self.domains:
-            domain_size = len(self.domains[self.selected_cell])
-            self.stats_vars["Domain Size & Selected Cell:"].config(
-                text=f"{domain_size} at [{self.selected_cell[0]+1},{self.selected_cell[1]+1}]")
-    
-    def ac3(self):
-        """AC-3 algorithm for arc consistency"""
-        queue = deque()
-        
-        # Create all arcs (i, j) where i and j are related by constraints
-        for row in range(9):
-            for col in range(9):
-                var1 = (row, col)
-                # Add arcs to peers in same row
-                for c in range(9):
-                    if c != col:
-                        var2 = (row, c)
-                        queue.append((var1, var2))
+       
+        self._ac3()
+
+    def _build_peers(self):
+        """Build peer relationships for all cells."""
+        peers = {}
+        for i in range(self.size):
+            for j in range(self.size):
+                cell_peers = set()
                 
-                # Add arcs to peers in same column
-                for r in range(9):
-                    if r != row:
-                        var2 = (r, col)
-                        queue.append((var1, var2))
+                # Add all cells in same row
+                for k in range(self.size):
+                    if k != j:
+                        cell_peers.add((i, k))
                 
-                # Add arcs to peers in same 3x3 box
-                box_row, box_col = 3 * (row // 3), 3 * (col // 3)
-                for r in range(box_row, box_row + 3):
-                    for c in range(box_col, box_col + 3):
-                        if r != row or c != col:
-                            var2 = (r, c)
-                            queue.append((var1, var2))
+                # Add all cells in same column
+                for k in range(self.size):
+                    if k != i:
+                        cell_peers.add((k, j))
+                
+                # Add all cells in same 3x3 box
+                box_row, box_col = 3 * (i // 3), 3 * (j // 3)
+                for di in range(3):
+                    for dj in range(3):
+                        r, c = box_row + di, box_col + dj
+                        if (r, c) != (i, j):
+                            cell_peers.add((r, c))
+                
+                peers[(i, j)] = cell_peers
+        return peers
+
+    def _validate_initial_grid(self):
+        """Check for duplicate values in rows, columns, and boxes."""
+        # Check rows
+        for i in range(self.size):
+            row_vals = [self.grid[i][j] for j in range(self.size) if self.grid[i][j] != 0]
+            if len(row_vals) != len(set(row_vals)):
+                return False
         
-        # Process arcs
-        while queue:
-            (xi, xj) = queue.popleft()
-            self.stats['arc_checks'] += 1
-            
-            if self.revise(xi, xj):
-                if len(self.domains[xi]) == 0:
-                    return False  # Domain wipe out
-                
-                # Add all neighbors of xi except xj back to queue
-                for neighbor in self.get_neighbors(xi):
-                    if neighbor != xj:
-                        queue.append((neighbor, xi))
+        # Check columns
+        for j in range(self.size):
+            col_vals = [self.grid[i][j] for i in range(self.size) if self.grid[i][j] != 0]
+            if len(col_vals) != len(set(col_vals)):
+                return False
+        
+        # Check boxes
+        for box_row in range(0, self.size, 3):
+            for box_col in range(0, self.size, 3):
+                box_vals = []
+                for i in range(3):
+                    for j in range(3):
+                        val = self.grid[box_row + i][box_col + j]
+                        if val != 0:
+                            box_vals.append(val)
+                if len(box_vals) != len(set(box_vals)):
+                    return False
         
         return True
-    
-    def revise(self, xi, xj):
-        """Revise domain of xi based on xj"""
-        revised = False
+
+    def _ac3(self):
+        """
+        AC-3 constraint propagation algorithm.
+        Ensures arc consistency for all constraints.
+        """
+        # Initialize queue with all arcs (xi, xj)
+        queue = deque()
+        for xi in self.domains:
+            for xj in self.peers[xi]:
+                queue.append((xi, xj))
         
-        # For each value in domain of xi
-        for val in list(self.domains[xi]):
-            # Check if there's a value in domain of xj that satisfies constraint
-            consistent = False
-            for other_val in self.domains[xj]:
-                if val != other_val:  # Different constraint
-                    consistent = True
+        while queue:
+            xi, xj = queue.popleft()
+            if self._revise(xi, xj):
+                # If domain becomes empty, inconsistency detected
+                if not self.domains[xi]:
+                    return False
+                
+                # Add all arcs (xk, xi) back to queue where xk != xj
+                for xk in self.peers[xi]:
+                    if xk != xj:
+                        queue.append((xk, xi))
+        
+        return True
+
+    def _revise(self, xi, xj):
+        """
+        Remove values from domain[xi] that have no support in domain[xj].
+        Returns True if domain was revised.
+        """
+        revised = False
+        to_remove = set()
+        
+        for x in self.domains[xi]:
+           
+            has_support = False
+            for y in self.domains[xj]:
+                if x != y:  # Binary constraint: different values
+                    has_support = True
                     break
             
-            if not consistent:
-                self.domains[xi].remove(val)
-                self.stats['prunes'] += 1
-                revised = True
+            if not has_support:
+                to_remove.add(x)
+        
+        if to_remove:
+            self.domains[xi] -= to_remove
+            revised = True
         
         return revised
-    
-    def get_neighbors(self, var):
-        """Get all neighbors of a variable"""
-        row, col = var
-        neighbors = set()
-        
-        # Same row
-        for c in range(9):
-            if c != col:
-                neighbors.add((row, c))
-        
-        # Same column
-        for r in range(9):
-            if r != row:
-                neighbors.add((r, col))
-        
-        # Same box
-        box_row, box_col = 3 * (row // 3), 3 * (col // 3)
-        for r in range(box_row, box_row + 3):
-            for c in range(box_col, box_col + 3):
-                if r != row or c != col:
-                    neighbors.add((r, c))
-        
-        return neighbors
-    
+
     def select_unassigned_variable(self):
-        """MRV - select variable with smallest domain"""
-        min_domain_size = 10
-        selected_var = None
+        """
+        MRV (Minimum Remaining Values) heuristic.
+        Select the unassigned variable with the smallest domain.
+        """
+        unassigned = [v for v in self.domains if len(self.domains[v]) > 1]
+        if not unassigned:
+            return None
+        return min(unassigned, key=lambda v: len(self.domains[v]))
+
+    def order_domain_values(self, var):
+        """
+        LCV (Least Constraining Value) heuristic.
+        Order values by how few constraints they remove from peers.
+        """
+        def count_constraints(value):
+            """Count how many peers would lose this value from their domain."""
+            count = 0
+            for peer in self.peers[var]:
+                if value in self.domains[peer]:
+                    count += 1
+            return count
         
-        for (row, col), domain in self.domains.items():
-            if self.current_board[row][col] == 0:  # Unassigned
-                if len(domain) < min_domain_size:
-                    min_domain_size = len(domain)
-                    selected_var = (row, col)
+        return sorted(self.domains[var], key=count_constraints)
+
+    def forward_check(self, var, value):
+        """
+        Forward checking: remove value from peers' domains.
+        Returns (inferences, is_consistent) where inferences are domain changes made.
+        """
+        inferences = {}
         
-        return selected_var
-    
-    def solve(self):
-        """Start solving the puzzle"""
-        if self.solving:
-            return
+        for peer in self.peers[var]:
+            if value in self.domains[peer]:
+                # Store original domain for backtracking
+                if peer not in inferences:
+                    inferences[peer] = self.domains[peer].copy()
+                self.domains[peer].discard(value)
+                
+                
+                if not self.domains[peer]:
+                    return inferences, False
         
-        self.solving = True
-        self.stats['time'] = 0
-        self.start_time = time.time()
-        
-        # Reset statistics
-        self.stats['nodes'] = 0
-        self.stats['backtracks'] = 0
-        self.stats['arc_checks'] = 0
-        self.stats['prunes'] = 0
-        
-        self.log("Starting CSP solver...")
-        self.log(f"Using AC-3 for arc consistency, MRV for variable selection")
-        
-        # Start recursive backtracking
-        self.root.after(100, self.backtrack)
-    
+        return inferences, True
+
+    def restore_domains(self, inferences):
+        """Restore domains after backtracking."""
+        for var, domain in inferences.items():
+            self.domains[var] = domain
+
+    def is_complete(self):
+        """Check if all variables are assigned (domains size 1)."""
+        return all(len(self.domains[v]) == 1 for v in self.domains)
+
     def backtrack(self):
-        """Recursive backtracking with visualization"""
-        if not self.solving:
-            return
+        """
+        Backtracking search algorithm with forward checking.
+        Returns True if solution found, False otherwise.
+        """
+        self.nodes_explored += 1
         
-        self.stats['nodes'] += 1
-        self.stats['time'] = time.time() - self.start_time
-        self.update_stats()
+        # Check if puzzle is solved
+        if self.is_complete():
+            return True
         
         # Select unassigned variable using MRV
         var = self.select_unassigned_variable()
-        
-        if var is None:  # All variables assigned
-            self.log("Solution found!")
-            self.solving = False
+        if var is None:
             return True
         
-        row, col = var
-        original_domain = self.domains[var].copy()
-        
-        # Try each value in domain
-        for value in sorted(original_domain):
-            self.log(f"Trying {value} at [{row+1},{col+1}]")
-            
-            # Assign value
-            self.current_board[row][col] = value
-            self.draw_board()
-            self.root.update()
-            
-            # Save current domains for backtracking
-            old_domains = copy.deepcopy(self.domains)
-            
-            # Update domain for this variable
+        # Try values in LCV order
+        for value in self.order_domain_values(var):
+            # Save current state
+            old_value = self.domains[var].copy()
             self.domains[var] = {value}
             
-            # Apply forward checking
-            if self.forward_check(var, value):
-                # Run AC-3
-                if self.ac3():
-                    # Check if any domain is empty
-                    if all(len(domain) > 0 for domain in self.domains.values()):
-                        # Recurse
-                        speed = int(self.speed_var.get())
-                        self.root.after(speed, lambda: self.continue_backtrack(var, value, old_domains))
-                        return
+            # Forward checking
+            inferences, consistent = self.forward_check(var, value)
+            
+            if consistent:
+                # Recursively search
+                result = self.backtrack()
+                if result:
+                    return True
+            
+            # Backtrack: restore domains
+            self.backtracks += 1
+            self.domains[var] = old_value
+            self.restore_domains(inferences)
         
-        # All values failed - backtrack
-        self.stats['backtracks'] += 1
-        self.log(f"Backtracking at [{row+1},{col+1}]")
-        self.current_board[row][col] = 0
-        self.draw_board()
-        self.update_stats()
-        
-        # Continue backtracking
-        self.root.after(50, self.backtrack)
         return False
-    
-    def continue_backtrack(self, var, value, old_domains):
-        """Continue backtracking after delay"""
-        if self.backtrack():
-            return True
+
+    def solve(self):
+        """Solve the Sudoku puzzle and return solution with statistics."""
+        self.start_time = time.time()
+        self.nodes_explored = 0
+        self.backtracks = 0
         
-        # Restore domains and try next value
-        self.domains = old_domains
-        return False
-    
-    def forward_check(self, var, value):
-        """Forward checking - prune values from neighbors"""
-        row, col = var
+        solution_found = self.backtrack()
         
-        # Check all peers
-        for neighbor in self.get_neighbors(var):
-            if value in self.domains[neighbor]:
-                self.domains[neighbor].remove(value)
-                self.stats['prunes'] += 1
+        self.end_time = time.time()
+        
+        if solution_found:
+            return self.get_grid(), {
+                'nodes': self.nodes_explored,
+                'backtracks': self.backtracks,
+                'time': self.end_time - self.start_time
+            }
+        else:
+            return None, None
+
+    def solve_with_steps(self):
+        """
+        Generator version that yields each assignment step for visualization.
+        Yields: ('assign', var, value, current_grid) for each assignment
+                ('solution', final_grid) when solved
+        """
+        if self.is_complete():
+            yield ('solution', self.get_grid())
+            return
+        
+        var = self.select_unassigned_variable()
+        if var is None:
+            yield ('solution', self.get_grid())
+            return
+        
+        for value in self.order_domain_values(var):
+            # Save current state
+            old_value = self.domains[var].copy()
+            self.domains[var] = {value}
+            
+            # Forward checking
+            inferences, consistent = self.forward_check(var, value)
+            
+            if consistent:
+                # Yield current assignment for visualization
+                yield ('assign', var, value, self.get_grid())
                 
-                if len(self.domains[neighbor]) == 0:
-                    return False  # Domain wipe out
+                # Recursively solve
+                result = yield from self.solve_with_steps()
+                if result:
+                    return
+            
+            # Backtrack: restore domains
+            self.domains[var] = old_value
+            self.restore_domains(inferences)
         
-        return True
+        return False
+
+    def get_grid(self):
+        """Convert current domains to grid format."""
+        grid = []
+        for i in range(self.size):
+            row = []
+            for j in range(self.size):
+                domain = self.domains[(i, j)]
+                if len(domain) == 1:
+                    row.append(next(iter(domain)))
+                else:
+                    row.append(0)
+            grid.append(row)
+        return grid
+
+    def print_solution_stats(self):
+        """Print solving statistics."""
+        if self.end_time and self.start_time:
+            print(f"\n=== Solving Statistics ===")
+            print(f"Nodes explored: {self.nodes_explored}")
+            print(f"Backtracks: {self.backtracks}")
+            print(f"Time taken: {self.end_time - self.start_time:.3f} seconds")
+            print(f"Constraint propagation: AC-3 + Forward Checking")
+            print(f"Heuristics: MRV + LCV")
+
+
+class SudokuGUI:
+    def __init__(self, initial_grid):
+        self.initial_grid = initial_grid
+        self.sudoku = Sudoku([row[:] for row in initial_grid])
+        self.size = 9
+        self.n = 3
+        
+        # Setup GUI
+        self.root = tk.Tk()
+        self.root.title("Sudoku CSP Solver")
+        self.setup_gui()
+        
+    def setup_gui(self):
+        """Setup the GUI components."""
+        # Colors for 3x3 boxes
+        self.colors = ["#e6f7ff", "#fffbe6"]
+        
+        # Main frame
+        main_frame = tk.Frame(self.root, padx=10, pady=10)
+        main_frame.pack()
+        
+        # Title
+        title = tk.Label(main_frame, text="Sudoku Solver - CSP with AC-3 + Forward Checking", 
+                        font=("Arial", 14, "bold"))
+        title.grid(row=0, column=0, columnspan=9, pady=(0, 10))
+        
+        # Grid frame
+        grid_frame = tk.Frame(main_frame)
+        grid_frame.grid(row=1, column=0, columnspan=9)
+        
+        # Create labels for each cell
+        self.labels = [[None for _ in range(self.size)] for _ in range(self.size)]
+        self.fixed = [[self.initial_grid[i][j] != 0 for j in range(self.size)] for i in range(self.size)]
+        
+        for i in range(self.size):
+            for j in range(self.size):
+                # Determine cell color based on box
+                bg_color = self.colors[((i // self.n) + (j // self.n)) % 2]
+                
+                # Text color: dark blue for fixed, gray for empty
+                fg_color = "#1a237e" if self.fixed[i][j] else "#616161"
+                
+                # Create label
+                label = tk.Label(
+                    grid_frame,
+                    text=str(self.initial_grid[i][j]) if self.initial_grid[i][j] != 0 else "",
+                    width=3,
+                    height=1,
+                    font=("Arial", 16, "bold"),
+                    borderwidth=2,
+                    relief="solid",
+                    bg=bg_color,
+                    fg=fg_color
+                )
+                label.grid(row=i, column=j, padx=1, pady=1, sticky="nsew")
+                self.labels[i][j] = label
+                
+                # Make cells expandable
+                grid_frame.grid_rowconfigure(i, weight=1)
+                grid_frame.grid_columnconfigure(j, weight=1)
+        
+        # Statistics frame
+        stats_frame = tk.Frame(main_frame, pady=10)
+        stats_frame.grid(row=2, column=0, columnspan=9)
+        
+        self.stats_text = tk.Text(stats_frame, height=4, width=50, font=("Arial", 10))
+        self.stats_text.pack()
+        
+        # Button frame
+        button_frame = tk.Frame(main_frame)
+        button_frame.grid(row=3, column=0, columnspan=9, pady=10)
+        
+        solve_btn = tk.Button(button_frame, text="Solve Step by Step", 
+                             command=self.solve_step_by_step,
+                             bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
+                             padx=10, pady=5)
+        solve_btn.pack(side=tk.LEFT, padx=5)
+        
+        solve_fast_btn = tk.Button(button_frame, text="Solve Fast (No Visualization)", 
+                                  command=self.solve_fast,
+                                  bg="#2196F3", fg="white", font=("Arial", 10, "bold"),
+                                  padx=10, pady=5)
+        solve_fast_btn.pack(side=tk.LEFT, padx=5)
+        
+        reset_btn = tk.Button(button_frame, text="Reset", 
+                             command=self.reset,
+                             bg="#f44336", fg="white", font=("Arial", 10, "bold"),
+                             padx=10, pady=5)
+        reset_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Delay between steps (ms)
+        self.delay = 50
+        
+    def update_grid(self, grid, highlight=None, highlight_color="#81c784"):
+        """Update the GUI grid display."""
+        for i in range(self.size):
+            for j in range(self.size):
+                val = grid[i][j]
+                
+                # Fixed cells show initial values
+                if self.fixed[i][j]:
+                    self.labels[i][j]['text'] = str(self.initial_grid[i][j])
+                    self.labels[i][j]['fg'] = "#1a237e"
+                else:
+                    self.labels[i][j]['text'] = str(val) if val != 0 else ""
+                    self.labels[i][j]['fg'] = "#388e3c" if val != 0 else "#616161"
+                
+                # Set background color
+                if highlight and (i, j) == highlight and not self.fixed[i][j]:
+                    self.labels[i][j]['bg'] = highlight_color
+                else:
+                    self.labels[i][j]['bg'] = self.colors[((i // self.n) + (j // self.n)) % 2]
+        
+        self.root.update()
     
-    def stop_solving(self):
-        """Stop the solving process"""
-        self.solving = False
-        self.log("Solving stopped by user")
+    def update_stats(self, stats):
+        """Update statistics display."""
+        self.stats_text.delete(1.0, tk.END)
+        self.stats_text.insert(1.0, 
+            f"Nodes Explored: {stats['nodes']}\n"
+            f"Backtracks: {stats['backtracks']}\n"
+            f"Time: {stats['time']:.3f} seconds\n"
+            f"Method: AC-3 + Forward Checking with MRV & LCV"
+        )
     
-    def new_puzzle(self):
-        """Load a new puzzle"""
-        self.stop_solving()
+    def solve_step_by_step(self):
+        """Solve the puzzle step by step with visualization."""
+        # Reset solver
+        self.sudoku = Sudoku([row[:] for row in self.initial_grid])
+        self.steps = self.sudoku.solve_with_steps()
+        self.step_through()
+    
+    def step_through(self):
+        """Process one step of the solution."""
+        try:
+            step = next(self.steps)
+            
+            if step[0] == 'assign':
+                _, var, value, grid = step
+                i, j = var
+                if not self.fixed[i][j]:
+                    self.update_grid(grid, highlight=(i, j), highlight_color="#81c784")
+                else:
+                    self.update_grid(grid)
+                self.root.after(self.delay, self.step_through)
+                
+            elif step[0] == 'solution':
+                _, grid = step
+                self.update_grid(grid)
+                
+                # Get final statistics
+                stats = {
+                    'nodes': self.sudoku.nodes_explored,
+                    'backtracks': self.sudoku.backtracks,
+                    'time': 0  # Not tracking time for step-by-step
+                }
+                self.update_stats(stats)
+                
+                messagebox.showinfo("Sudoku Solver", 
+                    f"Puzzle Solved!\n\n"
+                    f"Nodes explored: {stats['nodes']}\n"
+                    f"Backtracks: {stats['backtracks']}")
+                
+        except StopIteration:
+            messagebox.showinfo("Sudoku Solver", "No solution found.")
+    
+    def solve_fast(self):
+        """Solve the puzzle without visualization and show statistics."""
+        # Reset solver
+        self.sudoku = Sudoku([row[:] for row in self.initial_grid])
         
-        if self.difficulty_var.get() == "Easy":
-            self.initial_board = [
-                [5, 3, 0, 0, 7, 0, 0, 0, 0],
-                [6, 0, 0, 1, 9, 5, 0, 0, 0],
-                [0, 9, 8, 0, 0, 0, 0, 6, 0],
-                [8, 0, 0, 0, 6, 0, 0, 0, 3],
-                [4, 0, 0, 8, 0, 3, 0, 0, 1],
-                [7, 0, 0, 0, 2, 0, 0, 0, 6],
-                [0, 6, 0, 0, 0, 0, 2, 8, 0],
-                [0, 0, 0, 4, 1, 9, 0, 0, 5],
-                [0, 0, 0, 0, 8, 0, 0, 7, 9]
-            ]
-        elif self.difficulty_var.get() == "Medium":
-            self.initial_board = [
-                [0, 0, 0, 2, 6, 0, 7, 0, 1],
-                [6, 8, 0, 0, 7, 0, 0, 9, 0],
-                [1, 9, 0, 0, 0, 4, 5, 0, 0],
-                [8, 2, 0, 1, 0, 0, 0, 4, 0],
-                [0, 0, 4, 6, 0, 2, 9, 0, 0],
-                [0, 5, 0, 0, 0, 3, 0, 2, 8],
-                [0, 0, 9, 3, 0, 0, 0, 7, 4],
-                [0, 4, 0, 0, 5, 0, 0, 3, 6],
-                [7, 0, 3, 0, 1, 8, 0, 0, 0]
-            ]
-        else:  # Hard
-            self.initial_board = [
-                [0, 2, 0, 6, 0, 8, 0, 0, 0],
-                [5, 8, 0, 0, 0, 9, 7, 0, 0],
-                [0, 0, 0, 0, 4, 0, 0, 1, 0],
-                [3, 7, 0, 2, 0, 0, 0, 6, 0],
-                [0, 0, 0, 0, 9, 0, 0, 0, 0],
-                [0, 5, 0, 0, 0, 3, 0, 9, 2],
-                [0, 1, 0, 0, 6, 0, 0, 0, 0],
-                [0, 0, 9, 4, 0, 0, 0, 7, 5],
-                [0, 0, 0, 9, 0, 2, 0, 3, 0]
-            ]
+        # Solve and get statistics
+        solution, stats = self.sudoku.solve()
         
-        self.reset()
-        self.log(f"New {self.difficulty_var.get()} puzzle loaded")
+        if solution:
+            self.update_grid(solution)
+            self.update_stats(stats)
+            messagebox.showinfo("Sudoku Solver", 
+                f"Puzzle Solved!\n\n"
+                f"Nodes explored: {stats['nodes']}\n"
+                f"Backtracks: {stats['backtracks']}\n"
+                f"Time: {stats['time']:.3f} seconds")
+        else:
+            messagebox.showerror("Sudoku Solver", "No solution exists!")
     
     def reset(self):
-        """Reset to initial puzzle"""
-        self.stop_solving()
-        self.current_board = copy.deepcopy(self.initial_board)
-        self.selected_cell = None
-        self.initialize_domains()
-        self.draw_board()
-        self.domain_label.config(text="Click a cell to view its domain")
-        
-        # Reset stats
-        self.stats = {
-            'nodes': 0,
-            'backtracks': 0,
-            'arc_checks': 0,
-            'prunes': 0,
-            'time': 0
-        }
-        self.update_stats()
-        self.log("Puzzle reset")
+        """Reset the grid to initial state."""
+        self.sudoku = Sudoku([row[:] for row in self.initial_grid])
+        self.update_grid(self.initial_grid)
+        self.stats_text.delete(1.0, tk.END)
     
-    def show_domains(self):
-        """Show all domains in a new window"""
-        domain_window = tk.Toplevel(self.root)
-        domain_window.title("Current Domains")
-        domain_window.geometry("600x500")
+    def run(self):
+        """Start the GUI application."""
+        self.root.mainloop()
+
+
+def main():
+    # Example puzzle (hard)
+    grid = [
+        [5, 3, 0, 0, 7, 0, 0, 0, 0],
+        [6, 0, 0, 1, 9, 5, 0, 0, 0],
+        [0, 9, 8, 0, 0, 0, 0, 6, 0],
+        [8, 0, 0, 0, 6, 0, 0, 0, 3],
+        [4, 0, 0, 8, 0, 3, 0, 0, 1],
+        [7, 0, 0, 0, 2, 0, 0, 0, 6],
+        [0, 6, 0, 0, 0, 0, 2, 8, 0],
+        [0, 0, 0, 4, 1, 9, 0, 0, 5],
+        [0, 0, 0, 0, 8, 0, 0, 7, 9]
+    ]
+    
+   
+    
+    try:
+        # Test solver without GUI first
+        print("Testing Sudoku CSP Solver...")
+        test_sudoku = Sudoku([row[:] for row in grid])
+        solution, stats = test_sudoku.solve()
         
-        # Create text widget with scrollbar
-        text_frame = ttk.Frame(domain_window)
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        if solution:
+            print("\nInitial Puzzle:")
+            for row in grid:
+                print(row)
+            print("\nSolution:")
+            for row in solution:
+                print(row)
+            test_sudoku.print_solution_stats()
+        else:
+            print("No solution found!")
         
-        text_widget = tk.Text(text_frame, wrap=tk.WORD)
-        scrollbar = ttk.Scrollbar(text_frame, command=text_widget.yview)
-        text_widget.configure(yscrollcommand=scrollbar.set)
+        # Launch GUI
+        print("\nLaunching GUI...")
+        app = SudokuGUI(grid)
+        app.run()
         
-        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Display domains
-        for row in range(9):
-            for col in range(9):
-                var = (row, col)
-                if var in self.domains:
-                    domain = sorted(self.domains[var])
-                    value = self.current_board[row][col]
-                    
-                    if value != 0:
-                        text_widget.insert(tk.END, f"Cell [{row+1},{col+1}]: {value} (fixed)\n")
-                    else:
-                        text_widget.insert(tk.END, f"Cell [{row+1},{col+1}]: {{{', '.join(map(str, domain))}}} (size: {len(domain)})\n")
-            
-            text_widget.insert(tk.END, "\n")
+    except ValueError as e:
+        print(f"Error: {e}")
+        messagebox.showerror("Sudoku Error", str(e))
+
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = SudokuGUI(root)
-    root.mainloop()
+    main()
