@@ -1,16 +1,15 @@
 import React, { useState, useCallback, useRef } from "react";
-import type { CSSProperties } from "react";
 import TreeComponent from "react-d3-tree";
-import type { RawNodeDatum, CustomNodeElementProps, TreeProps } from "react-d3-tree";
+import type { RawNodeDatum, CustomNodeElementProps } from "react-d3-tree";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const Tree = TreeComponent as any;
 
 // ── Types ────────────────────────────────────────────────────────────────────
-interface Person {
+interface PersonNode extends RawNodeDatum {
   name: string;
-  attributes: { gender: "male" | "female" };
-  children?: Person[];
+  attributes: { gender: "male" | "female"; spouse: string };
+  children?: PersonNode[];
 }
 interface LogEntry {
   type: "system" | "query" | "binding" | "result" | "error";
@@ -23,48 +22,90 @@ interface QueryResult {
   msg?: string;
 }
 
+// ── Constants ────────────────────────────────────────────────────────────────
+const MAX_LOG = 30;
+const BASE          = "#041824";
+const GREEN         = "#33ddff";
+const DGREEN        = "#88ffff";
+const DIM           = "#1a4a60";
+const YELLOW        = "#ffcc44";
+const RED           = "#ff6666";
+const MALE_BG       = "#062a48";
+const MALE_STROKE   = "#1199ee";
+const MALE_TEXT     = "#ffffff";
+const FEMALE_BG     = "#3a1400";
+const FEMALE_STROKE = "#ff7722";
+const FEMALE_TEXT   = "#ffffff";
+const SPOUSE_BG     = "#1a2a0a";
+const SPOUSE_STROKE = "#66cc44";
+const SPOUSE_TEXT   = "#ffffff";
+
 // ── Knowledge Base ───────────────────────────────────────────────────────────
-const familyKB: Person = {
+const spouseMap: Record<string, string> = {
+  "Alistair": "Margaret", "Margaret": "Alistair",
+  "Rowan":    "Sylvia",   "Sylvia":   "Rowan",
+  "Vivienne": "Edmund",   "Edmund":   "Vivienne",
+  "Theo":     "Petra",    "Petra":    "Theo",
+};
+
+const spouseSet = new Set(["Margaret", "Sylvia", "Edmund", "Petra"]);
+
+const genderMap: Record<string, "male" | "female"> = {
+  "Alistair": "male",   "Margaret": "female",
+  "Rowan":    "male",   "Sylvia":   "female",
+  "Vivienne": "female", "Edmund":   "male",
+  "Theo":     "male",   "Petra":    "female",
+  "Celeste":  "female", "Jasper":   "male",
+  "Isolde":   "female",
+};
+
+const familyTree: PersonNode = {
   name: "Alistair",
-  attributes: { gender: "male" },
+  attributes: { gender: "male", spouse: "Margaret" },
   children: [
     {
       name: "Rowan",
-      attributes: { gender: "male" },
-      children: [{
-        name: "Theo",
-        attributes: { gender: "male" },
-        children: [{ name: "Celeste", attributes: { gender: "female" } }],
-      }],
+      attributes: { gender: "male", spouse: "Sylvia" },
+      children: [
+        {
+          name: "Theo",
+          attributes: { gender: "male", spouse: "Petra" },
+          children: [
+            { name: "Celeste", attributes: { gender: "female", spouse: "" } },
+          ],
+        },
+      ],
     },
     {
       name: "Vivienne",
-      attributes: { gender: "female" },
+      attributes: { gender: "female", spouse: "Edmund" },
       children: [
-        { name: "Jasper", attributes: { gender: "male" } },
-        { name: "Isolde", attributes: { gender: "female" } },
+        { name: "Jasper",  attributes: { gender: "male",   spouse: "" } },
+        { name: "Isolde",  attributes: { gender: "female", spouse: "" } },
       ],
     },
   ],
 };
 
 // ── Inference Engine ─────────────────────────────────────────────────────────
-function getAllPeople(node: Person, acc: Person[] = []): Person[] {
-  acc.push(node);
-  (node.children ?? []).forEach((c) => getAllPeople(c, acc));
+function getAllBloodPeople(node: PersonNode, acc: string[] = []): string[] {
+  acc.push(node.name);
+  (node.children ?? []).forEach(c => getAllBloodPeople(c as PersonNode, acc));
   return acc;
 }
+const allBlood = getAllBloodPeople(familyTree);
+const allPeople = [...allBlood, ...Object.keys(spouseMap).filter(k => spouseSet.has(k))];
 
-function getParent(name: string, node: Person, parent: Person | null = null): Person | null | undefined {
+function getParent(name: string, node: PersonNode, parent: PersonNode | null = null): PersonNode | null | undefined {
   if (node.name === name) return parent;
   for (const c of node.children ?? []) {
-    const r = getParent(name, c, node);
+    const r = getParent(name, c as PersonNode, node);
     if (r !== undefined) return r;
   }
   return undefined;
 }
 
-function getAncestors(name: string, root: Person): string[] {
+function getAncestors(name: string, root: PersonNode): string[] {
   const results: string[] = [];
   let current = getParent(name, root);
   while (current) {
@@ -74,158 +115,229 @@ function getAncestors(name: string, root: Person): string[] {
   return results;
 }
 
-function getDescendants(node: Person, acc: string[] = []): string[] {
-  (node.children ?? []).forEach((c) => { acc.push(c.name); getDescendants(c, acc); });
+function getDescendants(node: PersonNode, acc: string[] = []): string[] {
+  (node.children ?? []).forEach(c => {
+    acc.push(c.name);
+    getDescendants(c as PersonNode, acc);
+  });
   return acc;
 }
 
-function getSiblings(name: string, root: Person): string[] {
+function getSiblings(name: string, root: PersonNode): string[] {
   const parent = getParent(name, root);
   if (!parent) return [];
-  return (parent.children ?? []).map((c) => c.name).filter((n) => n !== name);
+  return (parent.children ?? []).map(c => c.name).filter(n => n !== name);
 }
 
-function runQuery(query: string, root: Person): QueryResult {
-  const all = getAllPeople(root);
+function findNode(name: string, node: PersonNode): PersonNode | null {
+  if (node.name === name) return node;
+  for (const c of node.children ?? []) {
+    const r = findNode(name, c as PersonNode);
+    if (r) return r;
+  }
+  return null;
+}
+
+function runQuery(query: string, root: PersonNode): QueryResult {
   const q = query.trim().toLowerCase().replace(/\.$/, "");
+  const lookup = (name: string): string | undefined =>
+    allPeople.find(p => p.toLowerCase() === name);
 
-  const ancMatch = q.match(/^ancestor\(x,\s*(\w+)\)$/);
-  if (ancMatch) {
-    const person = all.find((p) => p.name.toLowerCase() === ancMatch[1]);
-    if (!person) return { type: "error", msg: `Unknown individual: ${ancMatch[1]}` };
-    const ancs = getAncestors(person.name, root);
-    return ancs.length
-      ? { type: "result", bindings: ancs.map((a) => ({ X: a })) }
+  const spouseX  = q.match(/^spouse\(x,\s*(\w+)\)$/);
+  const spouseXr = q.match(/^spouse\((\w+),\s*x\)$/);
+  const spouseTarget = spouseX?.[1] ?? spouseXr?.[1];
+  if (spouseTarget) {
+    const found = lookup(spouseTarget);
+    if (!found) return { type: "error", msg: `Unknown individual: ${spouseTarget}` };
+    const sp = spouseMap[found];
+    return sp
+      ? { type: "result", bindings: [{ X: sp }] }
       : { type: "result", bindings: [], msg: "false." };
   }
 
+  const ancMatch  = q.match(/^ancestor\(x,\s*(\w+)\)$/);
   const descMatch = q.match(/^descendant\(x,\s*(\w+)\)$/);
+  const sibMatch  = q.match(/^sibling\(x,\s*(\w+)\)$/);
+  const parMatch  = q.match(/^parent\(x,\s*(\w+)\)$/);
+
+  if (ancMatch) {
+    const p = lookup(ancMatch[1]);
+    if (!p) return { type: "error", msg: `Unknown: ${ancMatch[1]}` };
+    const ancs = getAncestors(p, root);
+    return ancs.length
+      ? { type: "result", bindings: ancs.map(a => ({ X: a })) }
+      : { type: "result", bindings: [], msg: "false." };
+  }
   if (descMatch) {
-    const person = all.find((p) => p.name.toLowerCase() === descMatch[1]);
-    if (!person) return { type: "error", msg: `Unknown individual: ${descMatch[1]}` };
-    const descs = getDescendants(person);
+    const p = lookup(descMatch[1]);
+    if (!p) return { type: "error", msg: `Unknown: ${descMatch[1]}` };
+    const node = findNode(p, root);
+    if (!node) return { type: "result", bindings: [], msg: "false." };
+    const descs = getDescendants(node);
     return descs.length
-      ? { type: "result", bindings: descs.map((d) => ({ X: d })) }
+      ? { type: "result", bindings: descs.map(d => ({ X: d })) }
       : { type: "result", bindings: [], msg: "false." };
   }
-
-  const sibMatch = q.match(/^sibling\(x,\s*(\w+)\)$/);
   if (sibMatch) {
-    const person = all.find((p) => p.name.toLowerCase() === sibMatch[1]);
-    if (!person) return { type: "error", msg: `Unknown individual: ${sibMatch[1]}` };
-    const sibs = getSiblings(person.name, root);
+    const p = lookup(sibMatch[1]);
+    if (!p) return { type: "error", msg: `Unknown: ${sibMatch[1]}` };
+    const sibs = getSiblings(p, root);
     return sibs.length
-      ? { type: "result", bindings: sibs.map((s) => ({ X: s })) }
+      ? { type: "result", bindings: sibs.map(s => ({ X: s })) }
       : { type: "result", bindings: [], msg: "false." };
   }
-
-  const parMatch = q.match(/^parent\(x,\s*(\w+)\)$/);
   if (parMatch) {
-    const person = all.find((p) => p.name.toLowerCase() === parMatch[1]);
-    if (!person) return { type: "error", msg: `Unknown individual: ${parMatch[1]}` };
-    const par = getParent(person.name, root);
+    const p = lookup(parMatch[1]);
+    if (!p) return { type: "error", msg: `Unknown: ${parMatch[1]}` };
+    const par = getParent(p, root);
     return par
       ? { type: "result", bindings: [{ X: par.name }] }
       : { type: "result", bindings: [], msg: "false." };
   }
 
-  const genMatch = q.match(/^gender\((\w+),\s*g\)$/);
-  if (genMatch) {
-    const person = all.find((p) => p.name.toLowerCase() === genMatch[1]);
-    if (!person) return { type: "error", msg: `Unknown individual: ${genMatch[1]}` };
-    return { type: "result", bindings: [{ G: person.attributes.gender }] };
-  }
-
   if (q === "male(x)")
-    return { type: "result", bindings: all.filter((p) => p.attributes.gender === "male").map((p) => ({ X: p.name })) };
+    return { type: "result", bindings: allPeople.filter(p => genderMap[p] === "male").map(p => ({ X: p })) };
   if (q === "female(x)")
-    return { type: "result", bindings: all.filter((p) => p.attributes.gender === "female").map((p) => ({ X: p.name })) };
+    return { type: "result", bindings: allPeople.filter(p => genderMap[p] === "female").map(p => ({ X: p })) };
 
-  return { type: "error", msg: "ERROR: Unknown predicate. Try: ancestor(X,name) parent(X,name) sibling(X,name) descendant(X,name) male(X) female(X)" };
+  return { type: "error", msg: "ERROR: Try: ancestor(X,name) parent(X,name) sibling(X,name) descendant(X,name) spouse(X,name) male(X) female(X)" };
 }
 
 // ── Custom Node ──────────────────────────────────────────────────────────────
-interface NodeElProps extends CustomNodeElementProps {
+// Omit the conflicting onNodeClick from CustomNodeElementProps, then add our own
+type NodeElProps = Omit<CustomNodeElementProps, "onNodeClick"> & {
   selected: string | null;
-  onNodeClick: (nd: RawNodeDatum) => void;
-}
+  onNodeClick: (nd: PersonNode) => void;
+};
 
 const NodeEl = ({ nodeDatum, selected, onNodeClick }: NodeElProps) => {
-  const isMale = (nodeDatum.attributes as Record<string, string>)?.gender === "male";
-  const isSelected = selected === nodeDatum.name;
+  const attrs = nodeDatum.attributes as { gender: string; spouse: string };
+  const isMale        = attrs.gender === "male";
+  const isSelected    = selected === nodeDatum.name;
+  const spouseName    = attrs.spouse ?? "";
+  const hasSpouse     = spouseName !== "";
+  const spouseGender: "male" | "female" = spouseName ? genderMap[spouseName] ?? "female" : "female";
+  const spouseIsMale  = spouseGender === "male";
+
+  const nodeW = 96, nodeH = 40, gap = 22;
+  const spouseOffsetX = nodeW / 2 + gap;
+
+  const handleBloodClick = () =>
+    onNodeClick(nodeDatum as unknown as PersonNode);
+
+  const handleSpouseClick = () => {
+    if (!spouseName) return;
+    onNodeClick({
+      name: spouseName,
+      attributes: { gender: spouseGender, spouse: nodeDatum.name },
+    } as PersonNode);
+  };
+
   return (
-    <g onClick={() => onNodeClick(nodeDatum)} style={{ cursor: "pointer" }}>
-      <rect
-        x="-48" y="-20" width="96" height="40" rx="4"
-        fill={isSelected ? DGREEN : isMale ? MALE_BG : FEMALE_BG}
-        stroke={isSelected ? DGREEN : isMale ? MALE_STROKE : FEMALE_STROKE}
-        strokeWidth={isSelected ? 2 : 1}
-        filter={isSelected ? "url(#glow)" : undefined}
-      />
-      <text
-        textAnchor="middle" dominantBaseline="middle"
-        fill={isSelected ? "#000a1a" : isMale ? MALE_TEXT : FEMALE_TEXT}
-        fontFamily="'Courier New', monospace"
-        fontSize="13"
-        fontWeight={isSelected ? "bold" : "normal"}
-      >
-        {nodeDatum.name}
-      </text>
-      <text
-        textAnchor="middle" y="28"
-        fill={isMale ? "#2a6a8a" : "#7a3a10"}
-        fontFamily="'Courier New', monospace"
-        fontSize="11"
-      >
-        {isMale ? "♂" : "♀"}
-      </text>
+    <g style={{ cursor: "pointer" }}>
+      {/* Blood node */}
+      <g onClick={handleBloodClick}>
+        <rect
+          x={-nodeW / 2} y={-nodeH / 2} width={nodeW} height={nodeH} rx={4}
+          fill={isSelected ? DGREEN : isMale ? MALE_BG : FEMALE_BG}
+          stroke={isSelected ? DGREEN : isMale ? MALE_STROKE : FEMALE_STROKE}
+          strokeWidth={isSelected ? 2 : 1}
+        />
+        <text
+          textAnchor="middle" dominantBaseline="middle"
+          fill={isSelected ? "#000a1a" : isMale ? MALE_TEXT : FEMALE_TEXT}
+          fontFamily="'Courier New', monospace" fontSize="12"
+          fontWeight={isSelected ? "bold" : "normal"}
+        >
+          {nodeDatum.name}
+        </text>
+        <text
+          textAnchor="middle" y={nodeH / 2 + 10}
+          fill={isMale ? "#4a9abb" : "#bb6a3a"}
+          fontFamily="'Courier New', monospace" fontSize="11"
+        >
+          {isMale ? "♂" : "♀"}
+        </text>
+      </g>
+
+      {/* Spouse node */}
+      {hasSpouse && (
+        <g onClick={handleSpouseClick}>
+          <line
+            x1={nodeW / 2} y1={0} x2={spouseOffsetX} y2={0}
+            stroke={SPOUSE_STROKE} strokeWidth={1.5} strokeDasharray="4,3"
+          />
+          <text
+            x={nodeW / 2 + gap / 2} y={-8} textAnchor="middle"
+            fill="#ff7788" fontFamily="'Courier New', monospace" fontSize="9"
+          >
+            ♥
+          </text>
+          <rect
+            x={spouseOffsetX} y={-nodeH / 2} width={nodeW} height={nodeH} rx={4}
+            fill={SPOUSE_BG} stroke={SPOUSE_STROKE} strokeWidth={1}
+          />
+          <text
+            textAnchor="middle" x={spouseOffsetX + nodeW / 2} dominantBaseline="middle"
+            fill={SPOUSE_TEXT} fontFamily="'Courier New', monospace" fontSize="12"
+          >
+            {spouseName}
+          </text>
+          <text
+            textAnchor="middle" x={spouseOffsetX + nodeW / 2} y={nodeH / 2 + 10}
+            fill="#4a8a3a" fontFamily="'Courier New', monospace" fontSize="11"
+          >
+            {spouseIsMale ? "♂" : "♀"}
+          </text>
+        </g>
+      )}
     </g>
   );
 };
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const MAX_LOG = 20;
-const BASE         = "#041824";
-const GREEN        = "#33ddff";
-const DGREEN       = "#88ffff";
-const DIM          = "#1a4a60";
-const YELLOW       = "#ffcc44";
-const RED          = "#ff6666";
-const MALE_BG      = "#062a48";
-const MALE_STROKE  = "#1199ee";
-const MALE_TEXT    = "#55ccff";
-const FEMALE_BG     = "#3a1400";
-const FEMALE_STROKE = "#ff7722";
-const FEMALE_TEXT   = "#ffaa55";
+// ── Log color map ─────────────────────────────────────────────────────────────
+const logColors: Record<LogEntry["type"], string> = {
+  system:  "#3a7a9a",
+  query:   DGREEN,
+  binding: GREEN,
+  result:  YELLOW,
+  error:   RED,
+};
 
 // ── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [input, setInput]       = useState<string>("");
   const [log, setLog]           = useState<LogEntry[]>([
-    { type: "system", text: "% Family Expert System v1.0" },
-    { type: "system", text: "% Knowledge base loaded: 7 facts" },
-    { type: "system", text: "% Click a node or type a query below." },
-    { type: "system", text: "% e.g.  ancestor(X, celeste)." },
+    { type: "system", text: "% Family Expert System v2.0" },
+    { type: "system", text: "% Knowledge base loaded: 3 generations, 11 individuals" },
+    { type: "system", text: "% Click any node or type a Prolog-style query." },
+    { type: "system", text: "% e.g.  spouse(X, rowan).  or  ancestor(X, celeste)." },
   ]);
   const logRef = useRef<HTMLDivElement>(null);
 
   const pushLog = useCallback((entries: LogEntry[]) => {
-    setLog((prev) => [...prev, ...entries].slice(-MAX_LOG));
+    setLog(prev => [...prev, ...entries].slice(-MAX_LOG));
     setTimeout(() => {
-      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+      if (logRef.current) {
+        logRef.current.scrollTop = logRef.current.scrollHeight;
+      }
     }, 30);
   }, []);
 
-  const handleNodeClick = useCallback((nd: RawNodeDatum) => {
-    setSelected(nd.name);
-    const q = `ancestor(X, ${nd.name.toLowerCase()})`;
-    const result = runQuery(q, familyKB);
+  const handleNodeClick = useCallback((nd: PersonNode) => {
+    const name = nd.name;
+    setSelected(name);
+    const isBlood = allBlood.includes(name);
+    const q = isBlood
+      ? `ancestor(X, ${name.toLowerCase()})`
+      : `spouse(X, ${name.toLowerCase()})`;
+    const result = runQuery(q, familyTree);
     const entries: LogEntry[] = [
       { type: "query", text: `?- ${q}.` },
       ...(result.bindings?.length
-        ? result.bindings.map((b, i) => ({
-            type: "binding" as const,
+        ? result.bindings.map((b, i): LogEntry => ({
+            type: "binding",
             text: `${Object.entries(b).map(([k, v]) => `${k} = ${v}`).join(", ")} ${
               i < (result.bindings?.length ?? 0) - 1 ? ";" : "."
             }`,
@@ -238,14 +350,14 @@ export default function App() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
-    const result = runQuery(input, familyKB);
+    const result = runQuery(input, familyTree);
     const entries: LogEntry[] = [
       { type: "query", text: `?- ${input.trim()}` },
       ...(result.type === "error"
         ? [{ type: "error" as const, text: result.msg ?? "Error." }]
         : result.bindings?.length
-        ? result.bindings.map((b, i) => ({
-            type: "binding" as const,
+        ? result.bindings.map((b, i): LogEntry => ({
+            type: "binding",
             text: `${Object.entries(b).map(([k, v]) => `${k} = ${v}`).join(", ")} ${
               i < (result.bindings?.length ?? 0) - 1 ? ";" : "."
             }`,
@@ -256,46 +368,28 @@ export default function App() {
     setInput("");
   };
 
-  const logStyleMap: Record<LogEntry["type"], CSSProperties> = {
-    system:  { color: "#3a7a9a", fontSize: 13 },
-    query:   { color: DGREEN,    fontSize: 13, fontWeight: "bold" },
-    binding: { color: GREEN,     paddingLeft: 16, fontSize: 13 },
-    result:  { color: YELLOW,    paddingLeft: 16, fontSize: 13 },
-    error:   { color: RED,       fontSize: 13 },
-  };
-
-  const treeProps: TreeProps = {
-    data: familyKB as unknown as RawNodeDatum,
-    orientation: "vertical",
-    pathFunc: "step",
-    translate: { x: 260, y: 60 },
-    separation: { siblings: 1.4, nonSiblings: 1.8 },
-    nodeSize: { x: 140, y: 100 },
-    onNodeClick: (nd: { data: RawNodeDatum }) => handleNodeClick(nd.data),
-    renderCustomNodeElement: (props: CustomNodeElementProps) => (
-      <NodeEl
-        {...props}
-        selected={selected}
-        onNodeClick={(nd: RawNodeDatum) => handleNodeClick(nd)}
-      />
-    ),
-  };
-
   return (
-    <div style={styles.root}>
-      <div style={styles.scanlines} />
+    <div style={{ position: "fixed", inset: 0, background: BASE, fontFamily: "'Courier New',monospace", color: GREEN, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* Scanlines */}
+      <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,30,60,0.08) 3px, rgba(0,30,60,0.08) 4px)", pointerEvents: "none", zIndex: 999 }} />
 
-      <div style={styles.header}>
-        <span style={styles.headerBadge}>KBS</span>
-        <span style={styles.headerTitle}>FAMILY KNOWLEDGE BASE · EXPERT SYSTEM</span>
-        <span style={styles.headerSub}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "9px 20px", borderBottom: `1px solid ${DIM}`, background: "#061e30", flexShrink: 0 }}>
+        <span style={{ background: GREEN, color: "#041824", padding: "3px 9px", fontSize: 11, fontWeight: "bold", letterSpacing: 2 }}>KBS</span>
+        <span style={{ fontSize: 12, letterSpacing: 3, color: GREEN, flex: 1 }}>FAMILY KNOWLEDGE BASE · EXPERT SYSTEM v2.0</span>
+        <span style={{ fontSize: 11, color: YELLOW, letterSpacing: 2 }}>
           {selected ? `CONTEXT: ${selected.toUpperCase()}` : "NO SELECTION"}
         </span>
       </div>
 
-      <div style={styles.body}>
-        <div style={styles.treePanel}>
-          <div style={styles.panelLabel}>FACT DATABASE · KINSHIP GRAPH</div>
+      {/* Body */}
+      <div style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}>
+
+        {/* Tree panel */}
+        <div style={{ flex: "0 0 60%", position: "relative", borderRight: `1px solid ${DIM}`, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "5px 14px", fontSize: 10, letterSpacing: 3, color: "#3a7a9a", borderBottom: `1px solid ${DIM}`, background: "#061e30" }}>
+            FACT DATABASE · KINSHIP GRAPH · 3 GENERATIONS
+          </div>
           <svg width="0" height="0" style={{ position: "absolute" }}>
             <defs>
               <filter id="glow">
@@ -308,202 +402,111 @@ export default function App() {
             </defs>
           </svg>
           <Tree
-            {...treeProps}
-            styles={{ links: { stroke: "#1a4a60", strokeWidth: 1.5 } }}
+            data={familyTree}
+            orientation="vertical"
+            pathFunc="step"
+            translate={{ x: 200, y: 70 }}
+            separation={{ siblings: 2.2, nonSiblings: 2.6 }}
+            nodeSize={{ x: 240, y: 130 }}
+            onNodeClick={(nd: { data: RawNodeDatum }) =>
+              handleNodeClick(nd.data as unknown as PersonNode)
+            }
+            renderCustomNodeElement={(props: CustomNodeElementProps) => (
+              <NodeEl
+                {...props}
+                selected={selected}
+                onNodeClick={handleNodeClick}
+              />
+            )}
+            styles={{ links: { stroke: DIM, strokeWidth: 1.5 } }}
           />
         </div>
 
-        <div style={styles.termPanel}>
-          <div style={styles.panelLabel}>INFERENCE ENGINE · PROLOG TERMINAL</div>
+        {/* Terminal panel */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#051520" }}>
+          <div style={{ padding: "5px 14px", fontSize: 10, letterSpacing: 3, color: "#3a7a9a", borderBottom: `1px solid ${DIM}`, background: "#061e30" }}>
+            INFERENCE ENGINE · PROLOG TERMINAL
+          </div>
 
-          <div style={styles.helpBar}>
+          {/* Hint buttons */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "7px 14px", borderBottom: `1px solid ${DIM}`, background: "#061e30" }}>
             {[
-              "ancestor(X, name)",
-              "parent(X, name)",
-              "sibling(X, name)",
-              "descendant(X, name)",
+              "ancestor(X, celeste)",
+              "parent(X, theo)",
+              "sibling(X, jasper)",
+              "descendant(X, rowan)",
+              "spouse(X, rowan)",
+              "spouse(X, margaret)",
               "male(X)",
               "female(X)",
-            ].map((hint) => (
-              <button key={hint} style={styles.hintBtn} onClick={() => setInput(hint)}>
+            ].map(hint => (
+              <button
+                key={hint}
+                style={{ background: "transparent", border: `1px solid ${DIM}`, color: "#4a9ab8", fontFamily: "'Courier New',monospace", fontSize: 10, padding: "3px 7px", cursor: "pointer", letterSpacing: 0.5 }}
+                onClick={() => setInput(hint)}
+              >
                 {hint}
               </button>
             ))}
           </div>
 
-          <div style={styles.logArea} ref={logRef}>
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 14, padding: "5px 14px", borderBottom: `1px solid ${DIM}`, background: "#051e30", fontSize: 10, color: "#4a7a9a" }}>
+            <span><span style={{ color: MALE_TEXT }}>■</span> Male (blood)</span>
+            <span><span style={{ color: FEMALE_TEXT }}>■</span> Female (blood)</span>
+            <span><span style={{ color: SPOUSE_TEXT }}>■</span> Spouse</span>
+            <span style={{ color: "#ff7788" }}>♥ married</span>
+            <span style={{ color: "#66cc44" }}>╌ union</span>
+          </div>
+
+          {/* Log */}
+          <div
+            ref={logRef}
+            style={{ flex: 1, overflowY: "auto", padding: "14px 18px", fontSize: 13, lineHeight: 1.8 }}
+          >
             {log.map((entry, i) => (
-              <div key={i} style={{ ...styles.logLine, ...logStyleMap[entry.type] }}>
+              <div
+                key={i}
+                style={{
+                  display: "block",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                  color: logColors[entry.type],
+                  fontWeight: entry.type === "query" ? "bold" : "normal",
+                  paddingLeft: (["binding", "result"] as LogEntry["type"][]).includes(entry.type) ? 16 : 0,
+                }}
+              >
                 {entry.text}
               </div>
             ))}
-            <div style={styles.cursor}>█</div>
+            <div style={{ color: DGREEN, fontSize: 14 }}>█</div>
           </div>
 
-          <form onSubmit={handleSubmit} style={styles.inputRow}>
-            <span style={styles.prompt}>?-</span>
+          {/* Input */}
+          <form
+            onSubmit={handleSubmit}
+            style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderTop: `1px solid ${DIM}`, background: "#061e30" }}
+          >
+            <span style={{ color: DGREEN, fontWeight: "bold", fontSize: 15, flexShrink: 0 }}>?-</span>
             <input
-              style={styles.input}
+              style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: GREEN, fontFamily: "'Courier New',monospace", fontSize: 14, caretColor: DGREEN }}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="ancestor(X, celeste)."
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
+              placeholder="spouse(X, alistair)."
               spellCheck={false}
               autoComplete="off"
             />
-            <button type="submit" style={styles.submitBtn}>▶ RUN</button>
+            <button
+              type="submit"
+              style={{ background: "transparent", border: `1px solid ${GREEN}`, color: GREEN, fontFamily: "'Courier New',monospace", fontSize: 11, padding: "5px 12px", cursor: "pointer", letterSpacing: 1 }}
+            >
+              ▶ RUN
+            </button>
           </form>
         </div>
       </div>
+
+      <style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
     </div>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-const styles: Record<string, CSSProperties> = {
-  root: {
-    position: "fixed",
-    inset: 0,
-    background: BASE,
-    fontFamily: "'Courier New', Courier, monospace",
-    color: GREEN,
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-  },
-  scanlines: {
-    position: "fixed",
-    inset: 0,
-    background: "repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,30,60,0.08) 3px, rgba(0,30,60,0.08) 4px)",
-    pointerEvents: "none",
-    zIndex: 999,
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    gap: 16,
-    padding: "9px 20px",
-    borderBottom: "1px solid " + DIM,
-    background: "#061e30",
-    flexShrink: 0,
-  },
-  headerBadge: {
-    background: GREEN,
-    color: "#041824",
-    padding: "3px 9px",
-    fontSize: 11,
-    fontWeight: "bold",
-    letterSpacing: 2,
-  },
-  headerTitle: {
-    fontSize: 12,
-    letterSpacing: 3,
-    color: GREEN,
-    flex: 1,
-  },
-  headerSub: {
-    fontSize: 11,
-    color: YELLOW,
-    letterSpacing: 2,
-  },
-  body: {
-    display: "flex",
-    flex: 1,
-    overflow: "hidden",
-    minHeight: 0,
-  },
-  treePanel: {
-    flex: "0 0 56%",
-    position: "relative",
-    borderRight: "1px solid " + DIM,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-  },
-  termPanel: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    background: "#051520",
-  },
-  panelLabel: {
-    padding: "5px 14px",
-    fontSize: 10,
-    letterSpacing: 3,
-    color: "#3a7a9a",
-    borderBottom: "1px solid " + DIM,
-    background: "#061e30",
-    textTransform: "uppercase",
-  },
-  helpBar: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 5,
-    padding: "7px 14px",
-    borderBottom: "1px solid " + DIM,
-    background: "#061e30",
-  },
-  hintBtn: {
-    background: "transparent",
-    border: "1px solid " + DIM,
-    color: "#4a9ab8",
-    fontFamily: "'Courier New', monospace",
-    fontSize: 11,
-    padding: "3px 8px",
-    cursor: "pointer",
-    letterSpacing: 0.5,
-    transition: "all 0.15s",
-  },
-  logArea: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "14px 18px",
-    fontSize: 14,
-    lineHeight: 1.8,
-  },
-  logLine: {
-    display: "block",
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-all",
-  },
-  cursor: {
-    color: DGREEN,
-    animation: "blink 1s step-end infinite",
-    fontSize: 14,
-  },
-  inputRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 16px",
-    borderTop: "1px solid " + DIM,
-    background: "#061e30",
-  },
-  prompt: {
-    color: DGREEN,
-    fontWeight: "bold",
-    fontSize: 15,
-    flexShrink: 0,
-  },
-  input: {
-    flex: 1,
-    background: "transparent",
-    border: "none",
-    outline: "none",
-    color: GREEN,
-    fontFamily: "'Courier New', monospace",
-    fontSize: 14,
-    caretColor: DGREEN,
-  },
-  submitBtn: {
-    background: "transparent",
-    border: "1px solid " + GREEN,
-    color: GREEN,
-    fontFamily: "'Courier New', monospace",
-    fontSize: 11,
-    padding: "5px 12px",
-    cursor: "pointer",
-    letterSpacing: 1,
-    flexShrink: 0,
-  },
-};
